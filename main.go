@@ -13,8 +13,8 @@ import (
 	"time"
 
 	"github.com/Sirupsen/logrus"
+	"github.com/TV4/env"
 	"github.com/satori/go.uuid"
-	env "github.com/securityscorecard/go-env"
 	"github.com/spf13/pflag"
 )
 
