@@ -1,0 +1,10 @@
+package: .
+import:
+- package: github.com/Sirupsen/logrus
+  version: ^1.0.3
+- package: github.com/TV4/env
+  version: ^0.1.1
+- package: github.com/satori/go.uuid
+  version: ^1.1.0
+- package: github.com/spf13/pflag
+  version: ^1.0.0
